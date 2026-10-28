@@ -67,11 +67,25 @@ mkdir -p zlib/lib
 touch zlib/lib/libz.dylib
 brew() { printf '%s' "$TEST_ROOT/zlib"; }
 BUILD_ARCH=arm64
-lipo() { printf '%s\\n' "$*" >> "$TEST_ROOT/lipo.log"; return 0; }
+xcrun() { printf '%s\\n' "$*" >> "$TEST_ROOT/lipo.log"; return 0; }
 test "$(zlib_prefix)" = "$TEST_ROOT/zlib" || exit 1
 grep -q -- '-verify_arch arm64' lipo.log || exit 1
-lipo() { return 1; }
+xcrun() { return 1; }
 if zlib_prefix; then exit 1; fi
+''')
+
+    def test_conda_lipo_on_path_is_not_used(self):
+        self.check('''
+BUILD_ARCH=arm64
+mkdir -p conda/bin
+printf '#!/bin/sh\\necho wrong-lipo >&2\\nexit 1\\n' > conda/bin/lipo
+chmod +x conda/bin/lipo
+export PATH="$TEST_ROOT/conda/bin:$PATH"
+xcrun() {
+  test "$1" = lipo && test "$2" = -verify_arch &&
+    test "$3" = arm64 && test "$4" = library.dylib
+}
+has_build_arch library.dylib
 ''')
 
     def test_consecutive_builds_pin_both_architectures(self):
