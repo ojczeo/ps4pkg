@@ -209,6 +209,12 @@ has_build_arch() {
   xcrun lipo -verify_arch "$BUILD_ARCH" "$1" >/dev/null 2>&1
 }
 
+check_build_toolchain() {
+  printf '#include <string>\nint main() { std::string s; }\n' |
+    "$BUILD_CXX" -arch "$BUILD_ARCH" -isysroot "$BUILD_SDK" \
+      -x c++ -fsyntax-only -
+}
+
 do_cryptopp() {
   local archive="$VENDOR_DIR/cryptopp/libcryptopp.a"
   [ -f "$archive" ] && has_build_arch "$archive" && return 0
@@ -216,7 +222,8 @@ do_cryptopp() {
   (cd "$VENDOR_DIR/cryptopp" &&
     make clean &&
     make -j"$(sysctl -n hw.ncpu)" static \
-      CXX="$BUILD_CXX" CXXFLAGS="-O3 -DNDEBUG -arch $BUILD_ARCH")
+      CXX="$BUILD_CXX" \
+      CXXFLAGS="-O3 -DNDEBUG -arch $BUILD_ARCH -isysroot \"$BUILD_SDK\"")
 }
 
 zlib_prefix() {
@@ -236,6 +243,7 @@ do_build() {
   mkdir -p "$build" "$HOME_DIR/bin"
   cmake -S "$VENDOR_DIR" -B "$build" -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_OSX_ARCHITECTURES="$BUILD_ARCH" \
+    -DCMAKE_OSX_SYSROOT="$BUILD_SDK" \
     -DCMAKE_CXX_COMPILER="$BUILD_CXX" \
     -DCMAKE_POLICY_DEFAULT_CMP0074=NEW \
     -DCMAKE_PREFIX_PATH="$BUILD_ZLIB" -DZLIB_ROOT="$BUILD_ZLIB" \
@@ -255,15 +263,18 @@ do_build() {
 
 cmd_install() {
   require_macos
-  local BUILD_ARCH BUILD_CXX BUILD_ZLIB
+  local BUILD_ARCH BUILD_CXX BUILD_ZLIB BUILD_SDK
   BUILD_ARCH="$(build_arch)"
   case "$BUILD_ARCH" in
     arm64 | x86_64) ;;
     *) die "unsupported build architecture: $BUILD_ARCH" ;;
   esac
-  BUILD_CXX="$(xcrun --find clang++)" || die "Apple clang++ is unavailable; check Xcode command line tools"
+  BUILD_CXX="$(xcrun --sdk macosx --find clang++)" || die "Apple clang++ is unavailable; check Xcode command line tools"
+  BUILD_SDK="$(xcrun --sdk macosx --show-sdk-path)" || die "macOS SDK is unavailable; check Xcode command line tools"
+  [ -d "$BUILD_SDK" ] || die "macOS SDK directory does not exist: $BUILD_SDK"
   banner
   field "Architecture" "$BUILD_ARCH"
+  field "SDK" "$BUILD_SDK"
   say "  Setting up the extraction engine. This happens once."
   printf '\n'
 
@@ -287,6 +298,7 @@ cmd_install() {
     exit 1
   }
 
+  spin_run "Checking C++ compiler and macOS SDK" check_build_toolchain || exit 1
   spin_run "Building crypto library" do_cryptopp || exit 1
   spin_run "Compiling extractor for macOS" do_build || exit 1
 
