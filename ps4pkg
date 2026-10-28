@@ -186,7 +186,7 @@ spin_run() {
     [ "$TTY" -eq 1 ] && printf '\r%*s\r' 70 ''
     bad "$label - failed"
     dim "$(tail -15 "$log" | sed 's/^/      /')"
-    rm -f "$log"
+    dim "      Full build log: $log"
     return 1
   fi
   [ "$TTY" -eq 1 ] && printf '\r%*s\r' 70 ''
@@ -195,28 +195,56 @@ spin_run() {
   return 0
 }
 
+build_arch() {
+  # uname can report x86_64 when the terminal is running under Rosetta.
+  if [ "$(sysctl -n hw.optional.arm64 2>/dev/null)" = 1 ]; then
+    printf '%s' arm64
+  else
+    uname -m
+  fi
+}
+
+has_build_arch() {
+  lipo -verify_arch "$BUILD_ARCH" "$1" >/dev/null 2>&1
+}
+
 do_cryptopp() {
-  [ -f "$VENDOR_DIR/cryptopp/libcryptopp.a" ] && return 0
-  (cd "$VENDOR_DIR/cryptopp" && make -j"$(sysctl -n hw.ncpu)" static)
+  local archive="$VENDOR_DIR/cryptopp/libcryptopp.a"
+  [ -f "$archive" ] && has_build_arch "$archive" && return 0
+  # An archive or leftover objects from another architecture cannot be reused.
+  (cd "$VENDOR_DIR/cryptopp" &&
+    make clean &&
+    make -j"$(sysctl -n hw.ncpu)" static \
+      CXX="$BUILD_CXX" CXXFLAGS="-O3 -DNDEBUG -arch $BUILD_ARCH")
 }
 
 zlib_prefix() {
   local p
   for p in "$(brew --prefix zlib 2>/dev/null)" /opt/homebrew/opt/zlib /usr/local/opt/zlib; do
-    [ -n "$p" ] && [ -f "$p/lib/libz.dylib" ] && printf '%s' "$p" && return 0
+    if [ -n "$p" ] && [ -f "$p/lib/libz.dylib" ] && has_build_arch "$p/lib/libz.dylib"; then
+      printf '%s' "$p"
+      return 0
+    fi
   done
   return 1
 }
 
 do_build() {
-  local build="$HOME_DIR/build" zlib
+  local build="$HOME_DIR/build"
   rm -rf "$build"
   mkdir -p "$build" "$HOME_DIR/bin"
-  zlib="$(zlib_prefix)" || return 1
   cmake -S "$VENDOR_DIR" -B "$build" -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_OSX_ARCHITECTURES="$BUILD_ARCH" \
+    -DCMAKE_CXX_COMPILER="$BUILD_CXX" \
     -DCMAKE_POLICY_DEFAULT_CMP0074=NEW \
-    -DCMAKE_PREFIX_PATH="$zlib" -DZLIB_ROOT="$zlib" || return 1
+    -DCMAKE_PREFIX_PATH="$BUILD_ZLIB" -DZLIB_ROOT="$BUILD_ZLIB" \
+    -DZLIB_LIBRARY="$BUILD_ZLIB/lib/libz.dylib" \
+    -DZLIB_INCLUDE_DIR="$BUILD_ZLIB/include" || return 1
   cmake --build "$build" || return 1
+  has_build_arch "$build/pkg_extractor" || {
+    printf 'Built extractor does not contain architecture %s\n' "$BUILD_ARCH" >&2
+    return 1
+  }
   cp "$build/pkg_extractor" "$EXTRACTOR" || return 1
   # The extractor links Crypto++ statically, so the object files and archive are
   # dead weight afterwards - about 90 MB of it.
@@ -226,7 +254,15 @@ do_build() {
 
 cmd_install() {
   require_macos
+  local BUILD_ARCH BUILD_CXX BUILD_ZLIB
+  BUILD_ARCH="$(build_arch)"
+  case "$BUILD_ARCH" in
+    arm64 | x86_64) ;;
+    *) die "unsupported build architecture: $BUILD_ARCH" ;;
+  esac
+  BUILD_CXX="$(xcrun --find clang++)" || die "Apple clang++ is unavailable; check Xcode command line tools"
   banner
+  field "Architecture" "$BUILD_ARCH"
   say "  Setting up the extraction engine. This happens once."
   printf '\n'
 
@@ -243,13 +279,12 @@ cmd_install() {
     exit 1
   fi
 
-  if ! pkg-config --atleast-version=1.3 zlib 2>/dev/null \
-    && [ ! -f /opt/homebrew/opt/zlib/lib/libz.dylib ] \
-    && [ ! -f /usr/local/opt/zlib/lib/libz.dylib ]; then
-    bad "zlib 1.3 or newer is required (macOS ships an older one)"
-    dim "      Install it with:  brew install zlib"
+  BUILD_ZLIB="$(zlib_prefix)" || {
+    bad "No Homebrew zlib library contains architecture $BUILD_ARCH"
+    dim "      Install zlib 1.3+ with Homebrew for $BUILD_ARCH, then retry."
+    dim "      Apple Silicon normally uses /opt/homebrew; Intel uses /usr/local."
     exit 1
-  fi
+  }
 
   spin_run "Building crypto library" do_cryptopp || exit 1
   spin_run "Compiling extractor for macOS" do_build || exit 1
@@ -652,3 +687,4 @@ case "${1:-help}" in
     die "unknown command: $1 (try: ps4pkg help)"
     ;;
 esac
+
