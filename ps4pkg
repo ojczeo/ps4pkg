@@ -205,7 +205,8 @@ build_arch() {
 }
 
 has_build_arch() {
-  lipo -verify_arch "$BUILD_ARCH" "$1" >/dev/null 2>&1
+  # Conda and other SDKs can shadow Apple's lipo on PATH.
+  xcrun lipo -verify_arch "$BUILD_ARCH" "$1" >/dev/null 2>&1
 }
 
 do_cryptopp() {
