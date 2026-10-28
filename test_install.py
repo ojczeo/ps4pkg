@@ -40,6 +40,7 @@ test "$(build_arch)" = x86_64
 do_cryptopp() ''' + SOURCE.split('do_cryptopp() ', 1)[1].split('\nzlib_prefix()', 1)[0].replace('$VENDOR_DIR', '$TEST_ROOT') + '''
 BUILD_ARCH=arm64
 BUILD_CXX=/usr/bin/clang++
+BUILD_SDK="$TEST_ROOT/MacOSX SDK.sdk"
 mkdir -p cryptopp
 touch cryptopp/libcryptopp.a
 has_build_arch() { return 1; }
@@ -47,7 +48,8 @@ sysctl() { echo 2; }
 make() { printf '%s\\n' "$*" >> "$TEST_ROOT/make.log"; }
 do_cryptopp || exit 1
 test "$(head -n 1 make.log)" = clean || exit 1
-grep -q -- 'CXXFLAGS=-O3 -DNDEBUG -arch arm64' make.log
+grep -Fq -- "CXXFLAGS=-O3 -DNDEBUG -arch arm64 -isysroot" make.log || exit 1
+grep -Fq -- "$BUILD_SDK" make.log
 ''')
 
     def test_matching_crypto_archive_is_reused(self):
@@ -93,6 +95,7 @@ has_build_arch library.dylib
             with self.subTest(arch=arch):
                 self.check('BUILD_ARCH=' + arch + '''
 BUILD_CXX=/usr/bin/clang++
+BUILD_SDK="$TEST_ROOT/MacOSX SDK.sdk"
 BUILD_ZLIB="$TEST_ROOT/zlib"
 has_build_arch() { return 0; }
 cmake() {
@@ -102,7 +105,30 @@ cmake() {
 do_build || exit 1
 do_build || exit 1
 test "$(grep -c -- "-DCMAKE_OSX_ARCHITECTURES=$BUILD_ARCH" cmake.log)" = 2 || exit 1
+test "$(grep -Fc -- "-DCMAKE_OSX_SYSROOT=$BUILD_SDK" cmake.log)" = 2 || exit 1
 test -f "$EXTRACTOR"
+''')
+
+    def test_toolchain_probe_passes_sdk_as_one_argument(self):
+        self.check('''
+BUILD_ARCH=arm64
+BUILD_SDK="$TEST_ROOT/MacOSX SDK.sdk"
+BUILD_CXX=mock_clang
+mock_clang() {
+  test "$1" = -arch && test "$2" = arm64 &&
+    test "$3" = -isysroot && test "$4" = "$BUILD_SDK" || return 1
+  grep -q '#include <string>'
+}
+check_build_toolchain
+''')
+
+    def test_toolchain_probe_propagates_failure(self):
+        self.check('''
+BUILD_ARCH=arm64
+BUILD_SDK=/missing-sdk
+BUILD_CXX=mock_clang
+mock_clang() { cat >/dev/null; return 1; }
+if check_build_toolchain; then exit 1; fi
 ''')
 
     def test_failure_preserves_full_log(self):
