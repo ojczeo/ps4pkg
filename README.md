@@ -40,6 +40,40 @@ $ ps4pkg extract "EP1063-CUSA13198_00-USOTSUKIHIME0001-A0100-V0100.pkg"
 
 ## Install
 
+### Architecture fix in this fork
+
+To use this fork's installer changes, clone the repository and run its local
+installer from the checkout (the upstream download command below downloads the
+upstream release instead):
+
+```bash
+git clone https://github.com/ojczeo/ps4pkg.git
+cd ps4pkg
+# Before the fix is merged, switch to its review branch:
+git checkout fix/macos-build-architecture
+bash install.sh
+```
+
+`ps4pkg install` selects the native hardware architecture: `arm64` on Apple
+Silicon, including when launched from a Rosetta terminal, or `x86_64` on Intel.
+It passes the same target to Crypto++ and CMake, checks zlib's architecture,
+and cleans stale Crypto++ objects before rebuilding a missing or incompatible
+archive. A failed build prints the location of its complete log and preserves it.
+
+Use a Homebrew zlib 1.3+ library for that architecture. Apple Silicon Homebrew
+normally lives in `/opt/homebrew`; Intel Homebrew normally lives in `/usr/local`.
+If no compatible library is found, install zlib with the matching Homebrew.
+
+Portable regression checks: `python3 test_install.py` and `bash -n ps4pkg`.
+These mock macOS build tools; an actual macOS build is still required to verify
+the compiled extractor. After installing, check the result with:
+
+```bash
+file "${PS4PKG_HOME:-${XDG_DATA_HOME:-$HOME/.local/share}/ps4pkg}/bin/pkg-extractor"
+```
+
+### Upstream installer
+
 One line. Paste it into Terminal:
 
 ```bash
@@ -232,3 +266,4 @@ See [LICENSE](LICENSE).
 
 Use it with games you own. This project does not provide, endorse, or assist with
 obtaining copyrighted material.
+
